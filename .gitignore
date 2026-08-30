@@ -1,0 +1,6 @@
+.env
+ads.db
+__pycache__/
+*.pyc
+.vscode/
+.idea/
