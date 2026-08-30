@@ -33,17 +33,14 @@ def api_get(path):
     return r.json()
 
 def txs(d):
-    if isinstance(d,list):
-        return d
+    if isinstance(d,list): return d
     if isinstance(d,dict):
         for k in ('transactions','items','content','data'):
-            if isinstance(d.get(k),list):
-                return d[k]
+            if isinstance(d.get(k),list): return d[k]
     return []
 
 def match(tx,ref,price):
-    if not isinstance(tx,dict):
-        return False
+    if not isinstance(tx,dict): return False
     raw=str(tx).lower()
     amounts=[str(tx[k]) for k in ('amount','value','money','total') if k in tx]
     return ref.lower() in raw and any(re.sub(r'[^0-9.]','',v)==price for v in amounts)
@@ -51,6 +48,9 @@ def match(tx,ref,price):
 def expire():
     with conn() as c:
         c.execute("UPDATE ads SET status='expired' WHERE status='active' AND expires_at<=?",(int(time.time()),))
+
+# Initialize on import so Gunicorn/Render creates the SQLite table.
+init()
 
 @app.get('/')
 def home():
@@ -76,49 +76,31 @@ def ads():
 @app.post('/api/ads')
 def create():
     d=request.get_json(silent=True) or {}
-    b=str(d.get('business','')).strip()
-    p=str(d.get('player','')).strip()
-    cat=str(d.get('category','')).strip()
-    loc=str(d.get('location','')).strip()
-    txt=str(d.get('text','')).strip()
-    plan=d.get('plan','basic')
-    if not b or not p or not txt:
-        return jsonify(error='Missing required fields'),400
-    if plan not in PLANS:
-        return jsonify(error='Invalid plan'),400
-    if bad(' '.join((b,txt,loc))):
-        return jsonify(error='Your ad contains blocked language'),400
-    if not PAY_ACCOUNT:
-        return jsonify(error='Server payment account is not configured'),503
-    aid=str(uuid.uuid4())
-    ref='DCADS-'+aid[:8].upper()
-    pl=PLANS[plan]
+    b=str(d.get('business','')).strip(); p=str(d.get('player','')).strip(); cat=str(d.get('category','')).strip(); loc=str(d.get('location','')).strip(); txt=str(d.get('text','')).strip(); plan=d.get('plan','basic')
+    if not b or not p or not txt: return jsonify(error='Missing required fields'),400
+    if plan not in PLANS: return jsonify(error='Invalid plan'),400
+    if bad(' '.join((b,txt,loc))): return jsonify(error='Your ad contains blocked language'),400
+    if not PAY_ACCOUNT: return jsonify(error='Server payment account is not configured'),503
+    aid=str(uuid.uuid4()); ref='DCADS-'+aid[:8].upper(); pl=PLANS[plan]
     with conn() as c:
         c.execute('INSERT INTO ads VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',(aid,b,p,cat,loc,txt,plan,pl['price'],'pending',int(time.time()),None,ref))
     return jsonify(adId=aid,status='pending_payment',price=pl['price'],durationMinutes=pl['minutes'],paymentAccountId=PAY_ACCOUNT,paymentReference=ref),201
 
 @app.get('/api/ads/<aid>/status')
 def status(aid):
-    with conn() as c:
-        row=c.execute('SELECT * FROM ads WHERE id=?',(aid,)).fetchone()
-    if not row:
-        return jsonify(error='Ad not found'),404
+    with conn() as c: row=c.execute('SELECT * FROM ads WHERE id=?',(aid,)).fetchone()
+    if not row: return jsonify(error='Ad not found'),404
     a=dict(row)
     if a['status']=='pending':
-        if not TOKEN or not PAY_ACCOUNT:
-            return jsonify(status='backend_not_configured',detail='Set DC_API_TOKEN and AD_PAYMENT_ACCOUNT_ID in Render environment variables'),503
-        try:
-            data=api_get(f"/api/v1/accounts/{PAY_ACCOUNT}/transactions")
-        except requests.RequestException as e:
-            return jsonify(status='payment_check_error',error=str(e)),502
+        if not TOKEN or not PAY_ACCOUNT: return jsonify(status='backend_not_configured',detail='Set DC_API_TOKEN and AD_PAYMENT_ACCOUNT_ID in Render environment variables'),503
+        try: data=api_get(f"/api/v1/accounts/{PAY_ACCOUNT}/transactions")
+        except requests.RequestException as e: return jsonify(status='payment_check_error',error=str(e)),502
         if any(match(x,a['payment_reference'],a['price']) for x in txs(data)):
             exp=int(time.time())+PLANS[a['plan']]['minutes']*60
-            with conn() as c:
-                c.execute("UPDATE ads SET status='active',expires_at=? WHERE id=?",(exp,aid))
+            with conn() as c: c.execute("UPDATE ads SET status='active',expires_at=? WHERE id=?",(exp,aid))
             return jsonify(status='active',expiresAt=exp)
         return jsonify(status='pending_payment')
     return jsonify(status=a['status'],expiresAt=a['expires_at'])
 
 if __name__=='__main__':
-    init()
     app.run(host='0.0.0.0',port=int(os.getenv('PORT','8081')),debug=False)
