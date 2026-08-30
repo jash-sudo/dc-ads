@@ -1,4 +1,4 @@
-const API_BASE = window.DC_ADS_API_BASE || "";
+const API_BASE = https://dc-ads.onrender.com/ || "";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
