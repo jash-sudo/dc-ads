@@ -2,14 +2,17 @@ import os,re,time,uuid,sqlite3,requests
 from pathlib import Path
 from flask import Flask,jsonify,request,send_from_directory
 from dotenv import load_dotenv
+from flask_cors import CORS
 load_dotenv();ROOT=Path(__file__).resolve().parent;DB=ROOT/'ads.db';API='https://api.democracycraft.net/economy';TOKEN=os.getenv('DC_API_TOKEN','');PAY_ACCOUNT=os.getenv('AD_PAYMENT_ACCOUNT_ID','')
 PLANS={'basic':{'price':'100.00','minutes':5},'featured':{'price':'250.00','minutes':10},'premium':{'price':'600.00','minutes':30}}
-BLOCKED={'fuck','shit','bitch','asshole','dick','piss','cunt','nigger','faggot'};app=Flask(__name__,static_folder=None)
+BLOCKED={'fuck','shit','bitch','asshole','dick','piss','cunt','nigger','faggot'}
+app=Flask(__name__,static_folder=None);CORS(app,resources={r'/api/*':{'origins':'*'}})
 def conn(): c=sqlite3.connect(DB);c.row_factory=sqlite3.Row;return c
 def init():
  with conn() as c:c.execute('CREATE TABLE IF NOT EXISTS ads(id TEXT PRIMARY KEY,business TEXT,player TEXT,category TEXT,location TEXT,text TEXT,plan TEXT,price TEXT,status TEXT,created_at INTEGER,expires_at INTEGER,payment_reference TEXT UNIQUE)')
 def bad(s):return any(x in set(re.findall(r'[a-z0-9]+',s.lower())) for x in BLOCKED)
 def api_get(path):
+ if not TOKEN:return None
  r=requests.get(API+path,headers={'Authorization':'Bearer '+TOKEN,'Accept':'application/json'},timeout=15);r.raise_for_status();return r.json()
 def txs(d):
  if isinstance(d,list):return d
@@ -18,13 +21,13 @@ def txs(d):
    if isinstance(d.get(k),list):return d[k]
  return []
 def match(tx,ref,price):
- raw=str(tx).lower();vals=[str(tx[k]) for k in ('amount','value','money') if isinstance(tx,dict) and k in tx];return ref.lower() in raw and any(price in v for v in vals)
+ if not isinstance(tx,dict):return False
+ raw=str(tx).lower();amounts=[str(tx[k]) for k in ('amount','value','money','total') if k in tx]
+ return ref.lower() in raw and any(re.sub(r'[^0-9.]','',v)==price for v in amounts)
 def expire():
  with conn() as c:c.execute("UPDATE ads SET status='expired' WHERE status='active' AND expires_at<=?",(int(time.time()),))
-@app.get('/')
-def home():return send_from_directory(ROOT,'index.html')
-@app.get('/<path:name>')
-def static(name):return send_from_directory(ROOT,name) if name in ('index.html','style.css','app.js') else (jsonify(error='not_found'),404)
+@app.get('/');def home():return send_from_directory(ROOT,'index.html')
+@app.get('/<path:name>');def static(name):return send_from_directory(ROOT,name) if name in ('index.html','style.css','app.js') else (jsonify(error='not_found'),404)
 @app.get('/api/ads')
 def ads():
  expire()
@@ -45,12 +48,12 @@ def status(aid):
  if not r:return jsonify(error='Ad not found'),404
  a=dict(r)
  if a['status']=='pending':
-  if not TOKEN or not PAY_ACCOUNT:return jsonify(status='backend_not_configured')
+  if not TOKEN or not PAY_ACCOUNT:return jsonify(status='backend_not_configured',detail='Set DC_API_TOKEN and AD_PAYMENT_ACCOUNT_ID in Render environment variables'),503
   try:data=api_get(f"/api/v1/accounts/{PAY_ACCOUNT}/transactions")
   except Exception as e:return jsonify(status='payment_check_error',error=str(e)),502
   if any(match(x,a['payment_reference'],a['price']) for x in txs(data)):
    exp=int(time.time())+PLANS[a['plan']]['minutes']*60
-   with conn() as c:c.execute('UPDATE ads SET status=\'active\',expires_at=? WHERE id=?',(exp,aid))
+   with conn() as c:c.execute("UPDATE ads SET status='active',expires_at=? WHERE id=?",(exp,aid))
    return jsonify(status='active',expiresAt=exp)
   return jsonify(status='pending_payment')
  return jsonify(status=a['status'],expiresAt=a['expires_at'])
